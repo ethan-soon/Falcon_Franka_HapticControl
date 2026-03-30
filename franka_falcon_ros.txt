@@ -1,0 +1,20 @@
+  ┌──────────────────────┬──────────────────────────────────────────────────┐
+  │       Feature        │                      Status                      │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ Falcon ROS2 node     │ Ready (/falcon/position, /falcon/force)          │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ Franka Gazebo sim    │ Ready (Ignition + ROS 2 control)                 │   
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ Cartesian → IK →     │ Exists in JointImpedanceWithIKExampleController, │   
+  │ joints               │  not wired to Falcon                             │   
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ Gripper (pick/place) │ Ready (Grasp/Move actions)                       │   
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ Gazebo forces →      │                                                  │
+  │ Falcon haptic        │ Not implemented, needs contact sensor bridge     │
+  │ feedback             │                                                  │   
+  └──────────────────────┴──────────────────────────────────────────────────┘
+                                                                                
+  The main work is writing two bridge components: a Falcon→Franka teleoperation 
+  node (position scaling + IK dispatch) and a Gazebo contact forces→Falcon
+  haptic feedback node.

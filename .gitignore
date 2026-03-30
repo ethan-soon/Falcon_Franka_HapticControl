@@ -1,0 +1,12 @@
+# Colcon build artifacts
+build/
+install/
+log/
+
+# IDE and tool config
+.vscode/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
