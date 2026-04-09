@@ -8,19 +8,19 @@
 //
 // Subscribes to:
 //   /falcon/position  (geometry_msgs/PointStamped)  - Falcon end-effector position
-//   /falcon/button_raw (std_msgs/Int32)             - button bitmask (1=right,2=up,4=middle,8=left)
+//   /falcon/button_raw (std_msgs/Int32)             - button bitmask (1=plus, 2=forward, 4=center, 8=minus)
 //
 // Publishes to:
-//   /falcon/force     (geometry_msgs/Vector3Stamped) - haptic force feedback to Falcon
-//   /target_pose      (geometry_msgs/PoseStamped)    - scaled Cartesian goal for Franka
+//   /falcon/force     (geometry_msgs/Vector3Stamped) 
+//   /target_pose      (geometry_msgs/PoseStamped)    
 //
 // Falcon workspace (metres):
 //   x: -0.062 to  0.062
 //   y: -0.058 to  0.058
 //   z:  0.075 to  0.175
 //
-// You will need to scale these into the Franka reachable workspace
-// and choose a fixed orientation (or add orientation control later).
+// 
+// 
 
 class FalconFrankaBridge : public rclcpp::Node
 {
@@ -29,13 +29,12 @@ public:
   {
     // Parameters ------------------------------------------------------------------------------------------
 
-    // Franka center point, when Novint is at rest position (0.0, 0.0, 1.0)
-    declare_parameter("franka_center_x", 0.5);
-    declare_parameter("franka_center_y", 0.5);
-    declare_parameter("franka_center_z", 0.5);
+    // Franka center point, when Novint is at rest position (0.0, 0.0, 0.125)
+    declare_parameter("franka_center_x", 0.0);
+    declare_parameter("franka_center_y", 0.0);
+    declare_parameter("franka_center_z", 0.125);
 
-    // Gains from Falcon to Franka space
-    // Falcon range is +/- 10 cm from rest position
+    // Gains from Falcon to Franka space (still need to update)
     declare_parameter("scale_x", 8.0);
     declare_parameter("scale_y", 8.0);
     declare_parameter("scale_z", 8.0);
@@ -71,7 +70,7 @@ public:
     pos_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
       "falcon/position", 10, std::bind(&FalconFrankaBridge::falcon_pos_cb, this, std::placeholders::_1)
     );
-
+        
     btn_sub_ = create_subscription<std_msgs::msg::Int32>(
       "falcon/button_raw", 10, std::bind(&FalconFrankaBridge::falcon_btn_cb, this, std::placeholders::_1)
     );
