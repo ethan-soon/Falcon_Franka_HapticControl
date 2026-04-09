@@ -15,10 +15,13 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <atomic>
+#include <mutex>
 #include <string>
 
 #include <controller_interface/controller_interface.hpp>
 #include <franka_example_controllers/robot_utils.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <moveit_msgs/srv/get_position_ik.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include "franka_semantic_components/franka_cartesian_pose_interface.hpp"
@@ -93,6 +96,13 @@ class JointImpedanceWithIKExampleController : public controller_interface::Contr
   Eigen::Quaterniond orientation_;
   Eigen::Vector3d position_;
   rclcpp::Client<moveit_msgs::srv::GetPositionIK>::SharedPtr compute_ik_client_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
+
+  // External pose target (written by subscription callback, read in update)
+  std::mutex target_mutex_;
+  Eigen::Vector3d external_position_;
+  Eigen::Quaterniond external_orientation_;
+  std::atomic<bool> has_external_target_{false};
 
   const bool k_elbow_activated_{false};
   bool initialization_flag_{true};

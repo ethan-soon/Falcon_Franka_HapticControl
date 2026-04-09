@@ -150,10 +150,18 @@ controller_interface::return_type JointImpedanceWithIKExampleController::update(
   }
   update_joint_states();
 
-  Eigen::Vector3d new_position = compute_new_position();
+  Eigen::Vector3d new_position;
+  Eigen::Quaterniond new_orientation = orientation_;
+  if (has_external_target_) {
+    std::lock_guard<std::mutex> lock(target_mutex_);
+    new_position = external_position_;
+    new_orientation = external_orientation_;
+  } else {
+    new_position = compute_new_position();
+  }
 
   auto service_request =
-      create_ik_service_request(new_position, orientation_, joint_positions_current_,
+      create_ik_service_request(new_position, new_orientation, joint_positions_current_,
                                 joint_velocities_current_, joint_efforts_current_);
 
   using ServiceResponseFuture = rclcpp::Client<moveit_msgs::srv::GetPositionIK>::SharedFuture;
@@ -238,29 +246,59 @@ CallbackReturn JointImpedanceWithIKExampleController::on_configure(
           robot_type_ + "/" + k_robot_model_interface_name,
           robot_type_ + "/" + k_robot_state_interface_name));
 
-  auto collision_client = get_node()->create_client<franka_msgs::srv::SetFullCollisionBehavior>(
-      "service_server/set_full_collision_behavior");
+  bool is_gazebo = false;
+  if (get_node()->has_parameter("gazebo")) {
+    is_gazebo = get_node()->get_parameter("gazebo").as_bool();
+  }
+
   compute_ik_client_ = get_node()->create_client<moveit_msgs::srv::GetPositionIK>("compute_ik");
 
-  while (!compute_ik_client_->wait_for_service(1s) || !collision_client->wait_for_service(1s)) {
-    if (!rclcpp::ok()) {
-      RCLCPP_ERROR(get_node()->get_logger(), "Interrupted while waiting for the service. Exiting.");
-      return CallbackReturn::ERROR;
+  if (!is_gazebo) {
+    auto collision_client = get_node()->create_client<franka_msgs::srv::SetFullCollisionBehavior>(
+        "service_server/set_full_collision_behavior");
+
+    while (!compute_ik_client_->wait_for_service(1s) || !collision_client->wait_for_service(1s)) {
+      if (!rclcpp::ok()) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+                     "Interrupted while waiting for the service. Exiting.");
+        return CallbackReturn::ERROR;
+      }
+      RCLCPP_INFO(get_node()->get_logger(), "service not available, waiting again...");
     }
-    RCLCPP_INFO(get_node()->get_logger(), "service not available, waiting again...");
-  }
 
-  auto request = DefaultRobotBehavior::getDefaultCollisionBehaviorRequest();
-  auto future_result = collision_client->async_send_request(request);
+    auto request = DefaultRobotBehavior::getDefaultCollisionBehaviorRequest();
+    auto future_result = collision_client->async_send_request(request);
+    auto success = future_result.get();
 
-  auto success = future_result.get();
-
-  if (!success->success) {
-    RCLCPP_FATAL(get_node()->get_logger(), "Failed to set default collision behavior.");
-    return CallbackReturn::ERROR;
+    if (!success->success) {
+      RCLCPP_FATAL(get_node()->get_logger(), "Failed to set default collision behavior.");
+      return CallbackReturn::ERROR;
+    } else {
+      RCLCPP_INFO(get_node()->get_logger(), "Default collision behavior set.");
+    }
   } else {
-    RCLCPP_INFO(get_node()->get_logger(), "Default collision behavior set.");
+    while (!compute_ik_client_->wait_for_service(1s)) {
+      if (!rclcpp::ok()) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+                     "Interrupted while waiting for compute_ik service. Exiting.");
+        return CallbackReturn::ERROR;
+      }
+      RCLCPP_INFO(get_node()->get_logger(), "compute_ik service not available, waiting...");
+    }
+    RCLCPP_INFO(get_node()->get_logger(), "Gazebo mode: skipping collision behavior setup.");
   }
+
+  pose_sub_ = get_node()->create_subscription<geometry_msgs::msg::PoseStamped>(
+      "target_pose", 10,
+      [this](geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(target_mutex_);
+        external_position_ = {msg->pose.position.x, msg->pose.position.y, msg->pose.position.z};
+        external_orientation_ = Eigen::Quaterniond{msg->pose.orientation.w,
+                                                   msg->pose.orientation.x,
+                                                   msg->pose.orientation.y,
+                                                   msg->pose.orientation.z};
+        has_external_target_ = true;
+      });
 
   auto parameters_client =
       std::make_shared<rclcpp::AsyncParametersClient>(get_node(), "robot_state_publisher");

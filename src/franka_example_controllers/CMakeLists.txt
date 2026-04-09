@@ -24,6 +24,7 @@ find_package(moveit_core REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(pinocchio REQUIRED)
 find_package(pluginlib REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
@@ -59,6 +60,7 @@ ament_target_dependencies(
         controller_interface
         franka_msgs
         franka_semantic_components
+        geometry_msgs
         hardware_interface
         moveit_core
         moveit_msgs
