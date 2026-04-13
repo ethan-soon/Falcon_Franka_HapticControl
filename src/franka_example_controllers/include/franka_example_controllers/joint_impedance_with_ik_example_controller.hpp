@@ -104,15 +104,21 @@ class JointImpedanceWithIKExampleController : public controller_interface::Contr
   Eigen::Quaterniond external_orientation_;
   std::atomic<bool> has_external_target_{false};
 
+  // IK result (written by async callback, read in update)
+  std::mutex ik_result_mutex_;
+  std::atomic<bool> ik_request_pending_{false};
+
   const bool k_elbow_activated_{false};
   bool initialization_flag_{true};
 
   std::string robot_type_;
-  bool is_gripper_loaded_ = true;
+  bool is_gripper_loaded_ = false;
+  bool is_gazebo_{false};
   std::string robot_description_;
 
   double elapsed_time_{0.0};
   double initial_robot_time_{0.0};
+  double initial_ros_time_{0.0};
   double robot_time_{0.0};
   std::unique_ptr<franka_semantic_components::FrankaRobotModel> franka_robot_model_;
 

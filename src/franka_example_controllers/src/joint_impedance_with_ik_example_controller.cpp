@@ -15,6 +15,7 @@
 #include <franka_example_controllers/default_robot_behavior_utils.hpp>
 #include <franka_example_controllers/joint_impedance_with_ik_example_controller.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <exception>
@@ -41,7 +42,9 @@ controller_interface::InterfaceConfiguration
 JointImpedanceWithIKExampleController::state_interface_configuration() const {
   controller_interface::InterfaceConfiguration config;
   config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
-  config.names = franka_cartesian_pose_->get_state_interface_names();
+  if (!is_gazebo_) {
+    config.names = franka_cartesian_pose_->get_state_interface_names();
+  }
   for (int i = 1; i <= num_joints_; ++i) {
     config.names.push_back(robot_type_ + "_joint" + std::to_string(i) + "/position");
   }
@@ -51,21 +54,26 @@ JointImpedanceWithIKExampleController::state_interface_configuration() const {
   for (int i = 1; i <= num_joints_; ++i) {
     config.names.push_back(robot_type_ + "_joint" + std::to_string(i) + "/effort");
   }
-  for (const auto& franka_robot_model_name : franka_robot_model_->get_state_interface_names()) {
-    config.names.push_back(franka_robot_model_name);
+  if (!is_gazebo_) {
+    for (const auto& franka_robot_model_name : franka_robot_model_->get_state_interface_names()) {
+      config.names.push_back(franka_robot_model_name);
+    }
+    config.names.push_back(robot_type_ + "/robot_time");
   }
-
-  config.names.push_back(robot_type_ + "/robot_time");
-
   return config;
 }
 
 void JointImpedanceWithIKExampleController::update_joint_states() {
+  // In Gazebo mode, state_interfaces_ only has joint position/velocity/effort (no cartesian_pose
+  // prefix), so the offsets are 0, 7, 14. On real hardware the 16-element cartesian_pose block
+  // comes first, giving offsets 16, 23, 30.
+  const int pos_offset = is_gazebo_ ? 0 : 16;
+  const int vel_offset = is_gazebo_ ? 7 : 23;
+  const int eff_offset = is_gazebo_ ? 14 : 30;
   for (auto i = 0; i < num_joints_; ++i) {
-    // TODO(yazi_ba) Can we get the state from its name?
-    const auto& position_interface = state_interfaces_.at(16 + i);
-    const auto& velocity_interface = state_interfaces_.at(23 + i);
-    const auto& effort_interface = state_interfaces_.at(30 + i);
+    const auto& position_interface = state_interfaces_.at(pos_offset + i);
+    const auto& velocity_interface = state_interfaces_.at(vel_offset + i);
+    const auto& effort_interface = state_interfaces_.at(eff_offset + i);
     joint_positions_current_[i] = position_interface.get_value();
     joint_velocities_current_[i] = velocity_interface.get_value();
     joint_efforts_current_[i] = effort_interface.get_value();
@@ -97,7 +105,7 @@ JointImpedanceWithIKExampleController::create_ik_service_request(
   auto service_request = std::make_shared<moveit_msgs::srv::GetPositionIK::Request>();
 
   service_request->ik_request.group_name = robot_type_ + "_arm";
-  service_request->ik_request.pose_stamped.header.frame_id = robot_type_ + "_link0";
+  service_request->ik_request.pose_stamped.header.frame_id = "base";
   service_request->ik_request.pose_stamped.pose.position.x = position.x();
   service_request->ik_request.pose_stamped.pose.position.y = position.y();
   service_request->ik_request.pose_stamped.pose.position.z = position.z();
@@ -123,8 +131,13 @@ Vector7d JointImpedanceWithIKExampleController::compute_torque_command(
     const Vector7d& joint_positions_desired,
     const Vector7d& joint_positions_current,
     const Vector7d& joint_velocities_current) {
-  std::array<double, 7> coriolis_array = franka_robot_model_->getCoriolisForceVector();
-  Vector7d coriolis(coriolis_array.data());
+  Vector7d coriolis;
+  if (!is_gazebo_) {
+    std::array<double, 7> coriolis_array = franka_robot_model_->getCoriolisForceVector();
+    coriolis = Vector7d(coriolis_array.data());
+  } else {
+    coriolis.setZero();
+  }
   const double kAlpha = 0.99;
   dq_filtered_ = (1 - kAlpha) * dq_filtered_ + kAlpha * joint_velocities_current;
   Vector7d q_error = joint_positions_desired - joint_positions_current;
@@ -135,18 +148,28 @@ Vector7d JointImpedanceWithIKExampleController::compute_torque_command(
 }
 
 controller_interface::return_type JointImpedanceWithIKExampleController::update(
-    const rclcpp::Time& /*time*/,
+    const rclcpp::Time& time,
     const rclcpp::Duration& /*period*/) {
   if (initialization_flag_) {
-    std::tie(orientation_, position_) =
-        franka_cartesian_pose_->getCurrentOrientationAndTranslation();
-
-    initial_robot_time_ = state_interfaces_.back().get_value();
+    if (!is_gazebo_) {
+      std::tie(orientation_, position_) =
+          franka_cartesian_pose_->getCurrentOrientationAndTranslation();
+      initial_robot_time_ = state_interfaces_.back().get_value();
+    } else {
+      // Default FR3 home position; only used if no external target arrives first.
+      position_ = Eigen::Vector3d(0.5, 0.0, 0.4);
+      orientation_ = Eigen::Quaterniond(0.7071, 0.0, 0.7071, 0.0);  // w,x,y,z: 90deg around Y, EE pointing down
+      initial_ros_time_ = time.seconds();
+    }
     elapsed_time_ = 0.0;
     initialization_flag_ = false;
   } else {
-    robot_time_ = state_interfaces_.back().get_value();
-    elapsed_time_ = robot_time_ - initial_robot_time_;
+    if (!is_gazebo_) {
+      robot_time_ = state_interfaces_.back().get_value();
+      elapsed_time_ = robot_time_ - initial_robot_time_;
+    } else {
+      elapsed_time_ = time.seconds() - initial_ros_time_;
+    }
   }
   update_joint_states();
 
@@ -160,29 +183,57 @@ controller_interface::return_type JointImpedanceWithIKExampleController::update(
     new_position = compute_new_position();
   }
 
-  auto service_request =
-      create_ik_service_request(new_position, new_orientation, joint_positions_current_,
-                                joint_velocities_current_, joint_efforts_current_);
+  // Only send a new IK request when the previous one has been answered.
+  // The update loop runs at ~1 kHz; the IK service cannot keep up at that rate.
+  if (!ik_request_pending_) {
+    ik_request_pending_ = true;
+    auto service_request =
+        create_ik_service_request(new_position, new_orientation, joint_positions_current_,
+                                  joint_velocities_current_, joint_efforts_current_);
 
-  using ServiceResponseFuture = rclcpp::Client<moveit_msgs::srv::GetPositionIK>::SharedFuture;
-  auto response_received_callback =
-      [&](ServiceResponseFuture future) {  // NOLINT(performance-unnecessary-value-param)
-        const auto& response = future.get();
-
-        if (response->error_code.val == response->error_code.SUCCESS) {
-          joint_positions_desired_ = response->solution.joint_state.position;
-        } else {
-          RCLCPP_INFO(get_node()->get_logger(), "Inverse kinematics solution failed.");
+    using ServiceResponseFuture = rclcpp::Client<moveit_msgs::srv::GetPositionIK>::SharedFuture;
+    auto response_received_callback = [this](ServiceResponseFuture future) {
+      ik_request_pending_ = false;
+      const auto& response = future.get();
+      if (response->error_code.val == response->error_code.SUCCESS) {
+        // Match joints by name — the response may contain gripper joints or
+        // a different ordering than the controller expects.
+        const auto& names = response->solution.joint_state.name;
+        const auto& positions = response->solution.joint_state.position;
+        std::vector<double> arm_positions(num_joints_);
+        bool found_all = true;
+        for (int j = 0; j < num_joints_; ++j) {
+          std::string joint_name = robot_type_ + "_joint" + std::to_string(j + 1);
+          auto it = std::find(names.begin(), names.end(), joint_name);
+          if (it == names.end()) {
+            found_all = false;
+            RCLCPP_WARN_ONCE(get_node()->get_logger(),
+                             "IK response missing expected joint '%s'.", joint_name.c_str());
+            break;
+          }
+          arm_positions[j] = positions[std::distance(names.begin(), it)];
         }
-      };
-  auto result_future_ =
-      compute_ik_client_->async_send_request(service_request, response_received_callback);
-
-  if (joint_positions_desired_.empty()) {
-    return controller_interface::return_type::OK;
+        if (found_all) {
+          std::lock_guard<std::mutex> lock(ik_result_mutex_);
+          joint_positions_desired_ = arm_positions;
+        }
+      } else {
+        RCLCPP_INFO(get_node()->get_logger(), "Inverse kinematics solution failed.");
+      }
+    };
+    compute_ik_client_->async_send_request(service_request, response_received_callback);
   }
 
-  Vector7d joint_positions_desired_eigen(joint_positions_desired_.data());
+  std::vector<double> joint_positions_desired_local;
+  {
+    std::lock_guard<std::mutex> lock(ik_result_mutex_);
+    if (joint_positions_desired_.empty()) {
+      return controller_interface::return_type::OK;
+    }
+    joint_positions_desired_local = joint_positions_desired_;
+  }
+
+  Vector7d joint_positions_desired_eigen(joint_positions_desired_local.data());
   Vector7d joint_positions_current_eigen(joint_positions_current_.data());
   Vector7d joint_velocities_current_eigen(joint_velocities_current_.data());
 
@@ -246,14 +297,14 @@ CallbackReturn JointImpedanceWithIKExampleController::on_configure(
           robot_type_ + "/" + k_robot_model_interface_name,
           robot_type_ + "/" + k_robot_state_interface_name));
 
-  bool is_gazebo = false;
+  is_gazebo_ = false;
   if (get_node()->has_parameter("gazebo")) {
-    is_gazebo = get_node()->get_parameter("gazebo").as_bool();
+    is_gazebo_ = get_node()->get_parameter("gazebo").as_bool();
   }
 
   compute_ik_client_ = get_node()->create_client<moveit_msgs::srv::GetPositionIK>("compute_ik");
 
-  if (!is_gazebo) {
+  if (!is_gazebo_) {
     auto collision_client = get_node()->create_client<franka_msgs::srv::SetFullCollisionBehavior>(
         "service_server/set_full_collision_behavior");
 
@@ -285,7 +336,8 @@ CallbackReturn JointImpedanceWithIKExampleController::on_configure(
       }
       RCLCPP_INFO(get_node()->get_logger(), "compute_ik service not available, waiting...");
     }
-    RCLCPP_INFO(get_node()->get_logger(), "Gazebo mode: skipping collision behavior setup.");
+    RCLCPP_INFO(get_node()->get_logger(),
+                "Gazebo mode: skipping collision behavior setup and Franka-specific interfaces.");
   }
 
   pose_sub_ = get_node()->create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -328,15 +380,19 @@ CallbackReturn JointImpedanceWithIKExampleController::on_activate(
   joint_velocities_current_.reserve(num_joints_);
   joint_efforts_current_.reserve(num_joints_);
 
-  franka_cartesian_pose_->assign_loaned_state_interfaces(state_interfaces_);
-  franka_robot_model_->assign_loaned_state_interfaces(state_interfaces_);
+  if (!is_gazebo_) {
+    franka_cartesian_pose_->assign_loaned_state_interfaces(state_interfaces_);
+    franka_robot_model_->assign_loaned_state_interfaces(state_interfaces_);
+  }
 
   return CallbackReturn::SUCCESS;
 }
 
 controller_interface::CallbackReturn JointImpedanceWithIKExampleController::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
-  franka_cartesian_pose_->release_interfaces();
+  if (!is_gazebo_) {
+    franka_cartesian_pose_->release_interfaces();
+  }
   return CallbackReturn::SUCCESS;
 }
 
