@@ -82,7 +82,7 @@ def generate_launch_description():
 
     load_gripper_launch_argument = DeclareLaunchArgument(
         load_gripper_name,
-        default_value='false',
+        default_value='true',
         description='true/false for activating the gripper')
     franka_hand_launch_argument = DeclareLaunchArgument(
         franka_hand_name,
@@ -119,16 +119,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    rviz_file = os.path.join(
-        get_package_share_directory('franka_description'), 'rviz', 'visualize_franka.rviz')
-    rviz = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2',
-        namespace=namespace,
-        arguments=['--display-config', rviz_file, '-f', 'world'],
-    )
-
     load_joint_state_broadcaster = ExecuteProcess(
         cmd=['ros2', 'control', 'load_controller', '--set-state', 'active',
              'joint_state_broadcaster'],
@@ -141,6 +131,12 @@ def generate_launch_description():
         output='screen'
     )
 
+    load_gripper_controller = ExecuteProcess(
+        cmd=['ros2', 'control', 'load_controller', '--set-state', 'active',
+             'gripper_controller'],
+        output='screen'
+    )
+
     # MoveIt2 move_group for IK service (kinematics-only URDF, no ros2_control)
     franka_xacro_file = os.path.join(
         get_package_share_directory('franka_description'),
@@ -150,7 +146,7 @@ def generate_launch_description():
         'robot_description': ParameterValue(
             Command([
                 FindExecutable(name='xacro'), ' ', franka_xacro_file,
-                ' ros2_control:=false hand:=false robot_type:=fr3 robot_ip:=dont_need'
+                ' ros2_control:=false hand:=true robot_type:=fr3 robot_ip:=dont_need'
             ]),
             value_type=str
         )
@@ -163,7 +159,7 @@ def generate_launch_description():
     moveit_robot_description_semantic = {
         'robot_description_semantic': ParameterValue(
             Command([FindExecutable(name='xacro'), ' ', franka_semantic_xacro_file,
-                     ' hand:=false']),
+                     ' hand:=true']),
             value_type=str
         )
     }
@@ -206,6 +202,14 @@ def generate_launch_description():
             'scale_y': 5.0,
             'scale_z': 5.0,
             'loop_rate_hz': 100.0,
+            # Falcon rests at z=0.125 when homed; subtract so Franka target stays at center when at rest
+            'falcon_rest_z': 0.125,
+            # FR3 default EE orientation measured from TF (fr3_link0 -> fr3_link8)
+            # RPY ~ (180deg, 0deg, -45deg), matches default joint config
+            'ee_orientation_w': 0.001,
+            'ee_orientation_x': 0.924,
+            'ee_orientation_y': -0.383,
+            'ee_orientation_z': -0.002,
         }],
     )
 
@@ -216,7 +220,6 @@ def generate_launch_description():
         namespace_launch_argument,
         gazebo_empty_world,
         robot_state_publisher,
-        rviz,
         spawn,
         move_group,
         falcon_node,
@@ -237,7 +240,7 @@ def generate_launch_description():
         RegisterEventHandler(
             event_handler=OnProcessExit(
                 target_action=load_joint_state_broadcaster,
-                on_exit=[load_ik_controller],
+                on_exit=[load_ik_controller, load_gripper_controller],
             )
         ),
     ])

@@ -164,8 +164,12 @@ public:
   /// \brief mapping of mimicked joints to index of joint they mimic
   std::vector<MimicJoint> mimic_joints_;
 
-  /// \brief Gain which converts position error to a velocity command
+  /// \brief Gain which converts position error to a velocity command (legacy, unused)
   double position_proportional_gain_;
+  /// \brief Proportional gain for force-based position control (N/m for prismatic joints)
+  double position_kp_{400.0};
+  /// \brief Derivative gain for force-based position control (N·s/m for prismatic joints)
+  double position_kd_{15.0};
 };
 
 namespace ign_ros2_control
@@ -205,6 +209,22 @@ bool IgnitionSystem::initSim(
   RCLCPP_INFO_STREAM(
     this->nh_->get_logger(), "The position_proportional_gain has been set to: "
       << this->dataPtr->position_proportional_gain_);
+
+  try {
+    this->dataPtr->position_kp_ =
+      this->nh_->declare_parameter<double>("position_kp", this->dataPtr->position_kp_);
+  } catch (rclcpp::exceptions::ParameterAlreadyDeclaredException &) {
+    this->nh_->get_parameter("position_kp", this->dataPtr->position_kp_);
+  }
+  try {
+    this->dataPtr->position_kd_ =
+      this->nh_->declare_parameter<double>("position_kd", this->dataPtr->position_kd_);
+  } catch (rclcpp::exceptions::ParameterAlreadyDeclaredException &) {
+    this->nh_->get_parameter("position_kd", this->dataPtr->position_kd_);
+  }
+  RCLCPP_INFO(this->nh_->get_logger(),
+    "Position force controller gains: Kp=%.1f  Kd=%.1f",
+    this->dataPtr->position_kp_, this->dataPtr->position_kd_);
 
   if (this->dataPtr->n_dof_ == 0) {
     RCLCPP_ERROR_STREAM(this->nh_->get_logger(), "There is no joint available");
@@ -378,8 +398,10 @@ bool IgnitionSystem::initSim(
     RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\tCommand:");
 
     // register the command handles
+    bool has_position_cmd = false;
     for (unsigned int i = 0; i < joint_info.command_interfaces.size(); ++i) {
       if (joint_info.command_interfaces[i].name == "position") {
+        has_position_cmd = true;
         RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\t\t position");
         this->dataPtr->command_interfaces_.emplace_back(
           joint_name + suffix, hardware_interface::HW_IF_POSITION,
@@ -419,6 +441,16 @@ bool IgnitionSystem::initSim(
           this->dataPtr->joints_[j].sim_joint,
           ignition::gazebo::components::JointVelocityReset({initial_velocity}));
       }
+    }
+
+    // If no control method was set (joint has no effort interface) but a position
+    // interface exists, default to POSITION mode. This covers gripper/finger joints
+    // that should be position-controlled without effort commands (e.g. in Gazebo).
+    if (!this->dataPtr->joints_[j].joint_control_method && has_position_cmd) {
+      this->dataPtr->joints_[j].joint_control_method |= POSITION;
+      RCLCPP_INFO(this->nh_->get_logger(),
+        "Joint '%s': no effort interface, defaulting to POSITION control mode.",
+        joint_name.c_str());
     }
 
     // check if joint is actuated (has command interfaces) or passive
@@ -593,6 +625,9 @@ hardware_interface::return_type IgnitionSystem::perform_command_mode_switch(
   const std::vector<std::string> & start_interfaces,
   const std::vector<std::string> & stop_interfaces)
 {
+  for (const auto & iface : start_interfaces) {
+    RCLCPP_INFO(this->nh_->get_logger(), "perform_command_mode_switch START: %s", iface.c_str());
+  }
   for (unsigned int j = 0; j < this->dataPtr->joints_.size(); j++) {
     for (const std::string & interface_name : stop_interfaces) {
       // Clear joint control method bits corresponding to stop interfaces
@@ -679,24 +714,21 @@ hardware_interface::return_type IgnitionSystem::write(
           {this->dataPtr->joints_[i].joint_velocity_cmd});
       }
     } else if (this->dataPtr->joints_[i].joint_control_method & POSITION) {
-      // Get error in position
-      double error;
-      error = (this->dataPtr->joints_[i].joint_position -
-        this->dataPtr->joints_[i].joint_position_cmd) *
-        *this->dataPtr->update_rate;
+      // Force-based PD position controller — resists inertial perturbations from arm motion.
+      // F = Kp*(cmd - pos) + Kd*(0 - vel)   (spring + damper toward commanded position)
+      double pos_error = this->dataPtr->joints_[i].joint_position_cmd -
+                         this->dataPtr->joints_[i].joint_position;
+      double force = this->dataPtr->position_kp_ * pos_error
+                   - this->dataPtr->position_kd_ * this->dataPtr->joints_[i].joint_velocity;
 
-      // Calculate target velcity
-      double target_vel = -this->dataPtr->position_proportional_gain_ * error;
-
-      auto vel = this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityCmd>(
+      auto forceComp = this->dataPtr->ecm->Component<ignition::gazebo::components::JointForceCmd>(
         this->dataPtr->joints_[i].sim_joint);
-
-      if (vel == nullptr) {
+      if (forceComp == nullptr) {
         this->dataPtr->ecm->CreateComponent(
           this->dataPtr->joints_[i].sim_joint,
-          ignition::gazebo::components::JointVelocityCmd({target_vel}));
-      } else if (!vel->Data().empty()) {
-        vel->Data()[0] = target_vel;
+          ignition::gazebo::components::JointForceCmd({force}));
+      } else if (!forceComp->Data().empty()) {
+        forceComp->Data()[0] = force;
       }
     } else if (this->dataPtr->joints_[i].joint_control_method & EFFORT) {
       if (!this->dataPtr->ecm->Component<ignition::gazebo::components::JointForceCmd>(
