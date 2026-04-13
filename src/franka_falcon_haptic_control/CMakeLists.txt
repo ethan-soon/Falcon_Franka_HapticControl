@@ -11,17 +11,23 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(control_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
 
 add_executable(falcon_franka_bridge src/falcon_franka_bridge.cpp)
 
 ament_target_dependencies(falcon_franka_bridge
   rclcpp
+  rclcpp_action
   geometry_msgs
   std_msgs
   sensor_msgs
+  control_msgs
+  trajectory_msgs
 )
 
 install(TARGETS falcon_franka_bridge
