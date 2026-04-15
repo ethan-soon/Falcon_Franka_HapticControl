@@ -53,21 +53,21 @@ joint_impedance_with_ik_example_controller:
     load_gripper: true
     gazebo: true
     k_gains:
+      - 200.0
+      - 200.0
+      - 200.0
+      - 200.0
       - 100.0
-      - 100.0
-      - 100.0
-      - 100.0
-      - 40.0
+      - 60.0
       - 20.0
-      - 8.0
     d_gains:
       - 30.0
       - 30.0
       - 30.0
       - 30.0
-      - 15.0
       - 10.0
-      - 6.0
+      - 7.0
+      - 4.0
 
 gz_ros2_control:
   ros__parameters:

@@ -180,6 +180,58 @@ def generate_launch_description():
         ],
     )
 
+    # Barrier obstacle in robot workspace
+    barrier_sdf = (
+        '<sdf version="1.8">'
+        '<model name="barrier">'
+        '<static>true</static>'
+        '<link name="link">'
+        '<collision name="collision">'
+        '<geometry><box><size>0.3 0.3 0.3</size></box></geometry>'
+        '</collision>'
+        '<visual name="visual">'
+        '<geometry><box><size>0.3 0.3 0.3</size></box></geometry>'
+        '<material>'
+        '<ambient>0.2 0.6 0.9 1</ambient>'
+        '<diffuse>0.2 0.6 0.9 1</diffuse>'
+        '</material>'
+        '</visual>'
+        '<sensor name="contact_sensor" type="contact">'
+        '<always_on>true</always_on>'
+        '<update_rate>100</update_rate>'
+        '<contact>'
+        '<collision>collision</collision>'
+        '</contact>'
+        '</sensor>'
+        '</link>'
+        '</model>'
+        '</sdf>'
+    )
+
+    # Bridge the Gz contact sensor topic into ROS 2
+    # Topic pattern: /world/{world}/model/barrier/link/link/sensor/contact_sensor/contact
+    barrier_contact_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            '/world/empty/model/barrier/link/link/sensor/contact_sensor/contact'
+            '@ros_gz_interfaces/msg/Contacts'
+            '[gz.msgs.Contacts'
+        ],
+        remappings=[(
+            '/world/empty/model/barrier/link/link/sensor/contact_sensor/contact',
+            '/barrier_contact'
+        )],
+        output='screen',
+    )
+    spawn_barrier = Node(
+        package='ros_gz_sim',
+        executable='create',
+        arguments=['-name', 'barrier', '-string', barrier_sdf,
+                   '-x', '0.6', '-y', '0.0', '-z', '0.4'],
+        output='screen',
+    )
+
     # Falcon hardware node
     falcon_node = Node(
         package='falcon_ros2',
@@ -224,6 +276,7 @@ def generate_launch_description():
         move_group,
         falcon_node,
         falcon_bridge,
+        barrier_contact_bridge,
         Node(
             package='joint_state_publisher',
             executable='joint_state_publisher',
@@ -234,7 +287,7 @@ def generate_launch_description():
         RegisterEventHandler(
             event_handler=OnProcessExit(
                 target_action=spawn,
-                on_exit=[load_joint_state_broadcaster],
+                on_exit=[load_joint_state_broadcaster, spawn_barrier],
             )
         ),
         RegisterEventHandler(
