@@ -17,6 +17,7 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
+find_package(ros_gz_interfaces REQUIRED)
 
 add_executable(falcon_franka_bridge src/falcon_franka_bridge.cpp)
 
@@ -28,6 +29,7 @@ ament_target_dependencies(falcon_franka_bridge
   sensor_msgs
   control_msgs
   trajectory_msgs
+  ros_gz_interfaces
 )
 
 install(TARGETS falcon_franka_bridge
